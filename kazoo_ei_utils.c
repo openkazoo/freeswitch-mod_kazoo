@@ -319,9 +319,10 @@ void close_socket(switch_socket_t **sock)
 
 void close_socketfd(int *sockfd)
 {
-	if (*sockfd) {
+	if (*sockfd > 0) {
 		shutdown(*sockfd, SHUT_RDWR);
 		close(*sockfd);
+		*sockfd = -1;
 	}
 }
 
@@ -419,6 +420,12 @@ void ei_link(ei_node_t *ei_node, erlang_pid *from, erlang_pid *to)
 	char *s;
 	int index = 0;
 
+	if (ei_node->nodefd <= 0) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Failed to link to process on %s: invalid node fd\n",
+						  ei_node->peer_nodename);
+		return;
+	}
+
 	index = 5;						   /* max sizes: */
 	ei_encode_version(msgbuf, &index); /*   1 */
 	ei_encode_tuple_header(msgbuf, &index, 3);
@@ -447,13 +454,15 @@ void ei_encode_switch_event(ei_x_buff *ebuf, switch_event_t *event)
 
 int ei_helper_send(ei_node_t *ei_node, erlang_pid *to, ei_x_buff *buf)
 {
-	int ret = 0;
+	int ret = -1;
 
-	if (ei_node->nodefd) {
+	if (ei_node->nodefd > 0) {
 #ifdef EI_DEBUG
 		ei_x_print_msg(buf, to, 1);
 #endif
 		ret = ei_send(ei_node->nodefd, to, buf->buff, buf->index);
+	} else {
+		errno = EBADF;
 	}
 
 	return ret;

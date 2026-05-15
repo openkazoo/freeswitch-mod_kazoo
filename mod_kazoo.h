@@ -1,4 +1,5 @@
 #include <arpa/nameser.h>
+#include <errno.h>
 #include <ei.h>
 #include <float.h>
 #include <netinet/in.h>
