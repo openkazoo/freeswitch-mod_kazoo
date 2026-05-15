@@ -32,7 +32,7 @@ Perform an initial bootstrap of FreeSWITCH so that a `modules.conf` file is crea
 Add the mod_kazoo to `modules.conf` so that an out-of-source build will be performed
 
 ```
-mod_kazoo|https://github.com/openkazoo/mod_kazoo.git -b main
+mod_kazoo|https://github.com/openkazoo/mod_kazoo.git -b 4.4
 ```
 
 Configure, build and install FreeSWITCH
