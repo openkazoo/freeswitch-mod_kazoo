@@ -116,6 +116,10 @@ static switch_xml_t fetch_handler(const char *section, const char *tag_name, con
 	const char *fetch_call_id;
 	ei_send_msg_t *send_msg = NULL;
 	int sent = 0;
+	int sent_pid_set = 0;
+	char client_node[MAXNODELEN + 1] = "unknown";
+	char sent_node[MAXNODELEN + 1] = "unknown";
+	erlang_pid sent_pid = {0};
 
 	now = switch_micro_time_now();
 
@@ -146,6 +150,7 @@ static switch_xml_t fetch_handler(const char *section, const char *tag_name, con
 		switch_thread_rwlock_unlock(agent->lock);
 		return xml;
 	}
+	switch_snprintf(client_node, sizeof(client_node), "%s", client->ei_node->peer_nodename);
 
 	/* no profile, no work required */
 	if (!profile) {
@@ -245,6 +250,9 @@ static switch_xml_t fetch_handler(const char *section, const char *tag_name, con
 							  section, reply.uuid_str, fetch_handler->pid.node, fetch_handler->pid.creation,
 							  fetch_handler->pid.num, fetch_handler->pid.serial);
 			sent = 1;
+			switch_snprintf(sent_node, sizeof(sent_node), "%s", client->ei_node->peer_nodename);
+			memcpy(&sent_pid, &fetch_handler->pid, sizeof(erlang_pid));
+			sent_pid_set = 1;
 		}
 		fetch_handler = fetch_handler->next;
 	}
@@ -263,7 +271,11 @@ static switch_xml_t fetch_handler(const char *section, const char *tag_name, con
 
 	switch_thread_rwlock_unlock(agent->lock);
 
-	if (!reply.xml_str) {
+	if (!sent) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,
+						  "Unable to queue %s XML request (%s) to any handler on node %s\n", section, reply.uuid_str,
+						  client_node);
+	} else if (!reply.xml_str) {
 		switch_time_t timeout;
 
 		timeout = switch_micro_time_now() + 3000000;
@@ -314,9 +326,17 @@ static switch_xml_t fetch_handler(const char *section, const char *tag_name, con
 		if ((xml = switch_xml_parse_str_dynamic(reply.xml_str, SWITCH_FALSE)) == NULL) {
 			switch_safe_free(reply.xml_str);
 		}
-	} else {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Request for %s XML (%s) timed-out after %dms\n",
-						  section, reply.uuid_str, (unsigned int)(switch_micro_time_now() - now) / 1000);
+	} else if (sent) {
+		if (sent_pid_set) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+							  "Request for %s XML (%s) to node %s handler %s <%d.%d.%d> timed-out after %dms\n",
+							  section, reply.uuid_str, sent_node, sent_pid.node, sent_pid.creation, sent_pid.num,
+							  sent_pid.serial,
+							  (unsigned int)(switch_micro_time_now() - now) / 1000);
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Request for %s XML (%s) timed-out after %dms\n",
+							  section, reply.uuid_str, (unsigned int)(switch_micro_time_now() - now) / 1000);
+		}
 	}
 
 	return xml;
