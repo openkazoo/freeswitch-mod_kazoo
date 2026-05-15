@@ -5,9 +5,9 @@
 #include <switch.h>
 
 #define MODNAME "mod_kazoo"
-#define KAZOO_BUNDLE "openkazoo"
-#define KAZOO_RELEASE "v4.4.0-0"
-#define KAZOO_VERSION "mod_kazoo v4.4.0-0 (openkazoo)"
+#define KAZOO_BUNDLE "community"
+#define KAZOO_RELEASE "v5.4.0"
+#define KAZOO_VERSION "mod_kazoo v5.4.0 (community)"
 
 #define KZ_MAX_SEPARATE_STRINGS 10
 #define HOSTNAME_MAX 1024
