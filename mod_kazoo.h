@@ -7,6 +7,8 @@
 #include <switch.h>
 #include <switch_event.h>
 #include <switch_json.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/types.h>
 
 #define MAX_ACL 100

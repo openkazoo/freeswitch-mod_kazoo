@@ -37,6 +37,8 @@
 
 #include "mod_kazoo.h"
 
+#define KZ_NODE_SEND_TIMEOUT_MS 3000
+
 struct api_command_struct_s {
 	char *cmd;
 	char *arg;
@@ -73,6 +75,19 @@ typedef enum {
 	REQUEST_JSON_API,
 	REQUEST_MAX
 } request_atoms_t;
+
+static void set_node_send_timeout(ei_node_t *ei_node)
+{
+	struct timeval tv;
+
+	tv.tv_sec = KZ_NODE_SEND_TIMEOUT_MS / 1000;
+	tv.tv_usec = (KZ_NODE_SEND_TIMEOUT_MS % 1000) * 1000;
+
+	if (setsockopt(ei_node->nodefd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) == -1) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
+						  "Failed to set Erlang node send timeout for %s: errno=%d\n", ei_node->peer_nodename, errno);
+	}
+}
 
 static switch_status_t find_request(char *atom, int *request)
 {
@@ -1739,6 +1754,8 @@ switch_status_t new_kazoo_node(int nodefd, ErlConnect *conn)
 	switch_socket_addr_get(&sa, SWITCH_FALSE, ei_node->socket);
 	ei_node->local_port = switch_sockaddr_get_port(sa);
 	switch_get_addr(ei_node->local_ip, sizeof(ei_node->local_ip), sa);
+
+	set_node_send_timeout(ei_node);
 
 	switch_queue_create(&ei_node->send_msgs, MAX_QUEUE_LEN, pool);
 	switch_queue_create(&ei_node->received_msgs, MAX_QUEUE_LEN, pool);
