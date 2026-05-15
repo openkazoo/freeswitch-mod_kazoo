@@ -1592,11 +1592,27 @@ static void *SWITCH_THREAD_FUNC handle_node(switch_thread_t *thread, void *obj)
 		while (++send_msg_count <= kazoo_globals.send_msg_batch &&
 			   ei_queue_pop(ei_node->send_msgs, &pop, ei_node->sender_queue_timeout) == SWITCH_STATUS_SUCCESS) {
 			ei_send_msg_t *send_msg = (ei_send_msg_t *)pop;
-			ei_helper_send(ei_node, &send_msg->pid, &send_msg->buf);
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sent erlang message to %s <%d.%d.%d>\n",
-							  send_msg->pid.node, send_msg->pid.creation, send_msg->pid.num, send_msg->pid.serial);
+			int send_status = ei_helper_send(ei_node, &send_msg->pid, &send_msg->buf);
+			if (send_status < 0) {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,
+								  "Failed to send erlang message to %s <%d.%d.%d> via node %s: erl_errno=%d errno=%d\n",
+								  send_msg->pid.node, send_msg->pid.creation, send_msg->pid.num,
+								  send_msg->pid.serial, ei_node->peer_nodename, erl_errno, errno);
+				switch_clear_flag(ei_node, LFLAG_RUNNING);
+				close_socketfd(&ei_node->nodefd);
+			} else {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sent erlang message to %s <%d.%d.%d>\n",
+								  send_msg->pid.node, send_msg->pid.creation, send_msg->pid.num, send_msg->pid.serial);
+			}
 			ei_x_free(&send_msg->buf);
 			switch_safe_free(send_msg);
+			if (send_status < 0) {
+				break;
+			}
+		}
+
+		if (!switch_test_flag(ei_node, LFLAG_RUNNING)) {
+			break;
 		}
 
 		/* wait for a erlang message, or timeout to check if the module is still running */
