@@ -349,6 +349,117 @@ SWITCH_STANDARD_APP(unset_function)
 	}
 }
 
+/* kz_deliver_event — fire a custom event with the given headers so it
+ * propagates through mod_kazoo's event_stream back to ecallmgr.
+ *
+ * Required by Kazoo 5 ecallmgr's dialplan emitter (ecallmgr_call_command etc.),
+ * which writes actions of the form:
+ *   <action application="kz_deliver_event"
+ *           data="Event-Name=CUSTOM,Event-Subclass=ROUTE_WINNER,Key=Val,..."/>
+ *   <action application="kz_deliver_event" data="Event-Name=CHANNEL_DATA"/>
+ *
+ * Default delimiter is ',' (matches what ecallmgr emits). Supports the
+ * standard kazoo_dptools `^^<delim>` prefix to override the delimiter:
+ *   data="^^|Event-Name=CUSTOM|Event-Subclass=FOO|Big-Value=v,with,commas"
+ *
+ * If Event-Name=CUSTOM and Event-Subclass is set, fires a CUSTOM event with
+ * that subclass. Otherwise tries switch_name_event() to map the name string
+ * to a known event type. Channel-data is attached either way so receivers
+ * see Unique-ID.
+ */
+#define DELIVER_EVENT_SHORT_DESC "Deliver custom event with given headers"
+#define DELIVER_EVENT_LONG_DESC  "Build and fire a switch_event populated with the comma-separated key=value pairs from the data argument. Event-Name and Event-Subclass select the event type."
+#define DELIVER_EVENT_SYNTAX     "[^^<delim>]Event-Name=NAME[,Event-Subclass=SUBCLASS][,Key=Value]..."
+
+SWITCH_STANDARD_APP(deliver_event_function)
+{
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	switch_event_t *event = NULL;
+	switch_event_types_t event_type = SWITCH_EVENT_CUSTOM;
+	const char *event_name = NULL;
+	const char *event_subclass = NULL;
+	char delim = ',';
+	char *arg = (char *) data;
+	char *array[256] = {0};
+	int i, argc;
+
+	if (zstr(arg)) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+		    "kz_deliver_event called with no data\n");
+		return;
+	}
+
+	if (*arg == '^' && *(arg + 1) == '^') {
+		arg += 2;
+		delim = *arg++;
+	}
+	if (delim == '\0') {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+		    "kz_deliver_event with empty delimiter\n");
+		return;
+	}
+
+	arg = switch_core_session_strdup(session, arg);
+	argc = switch_split(arg, delim, array);
+
+	/* First pass: find Event-Name / Event-Subclass without mutating array entries */
+	for (i = 0; i < argc; i++) {
+		char *eq = strchr(array[i], '=');
+		if (!eq) continue;
+		if (eq - array[i] == 10 && !strncasecmp(array[i], "Event-Name", 10)) {
+			event_name = eq + 1;
+		} else if (eq - array[i] == 14 && !strncasecmp(array[i], "Event-Subclass", 14)) {
+			event_subclass = eq + 1;
+		}
+	}
+
+	if (zstr(event_name)) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+		    "kz_deliver_event: no Event-Name in data\n");
+		return;
+	}
+
+	/* Create the event */
+	if (!strcasecmp(event_name, "CUSTOM")) {
+		if (zstr(event_subclass)) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+			    "kz_deliver_event: Event-Name=CUSTOM requires Event-Subclass\n");
+			return;
+		}
+		if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, event_subclass) != SWITCH_STATUS_SUCCESS) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+			    "kz_deliver_event: cannot create CUSTOM event subclass %s\n", event_subclass);
+			return;
+		}
+	} else if (switch_name_event(event_name, &event_type) == SWITCH_STATUS_SUCCESS) {
+		if (switch_event_create(&event, event_type) != SWITCH_STATUS_SUCCESS) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+			    "kz_deliver_event: cannot create event %s\n", event_name);
+			return;
+		}
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+		    "kz_deliver_event: unknown event name '%s'\n", event_name);
+		return;
+	}
+
+	/* Attach channel data so receivers can correlate (Unique-ID etc.) */
+	switch_channel_event_set_data(channel, event);
+
+	/* Second pass: add all headers except Event-Name/Event-Subclass (already set by create) */
+	for (i = 0; i < argc; i++) {
+		char *eq = strchr(array[i], '=');
+		if (!eq) continue;
+		*eq = '\0';
+		if (!strcasecmp(array[i], "Event-Name") || !strcasecmp(array[i], "Event-Subclass")) {
+			continue;
+		}
+		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, array[i], eq + 1);
+	}
+
+	switch_event_fire(&event);
+}
+
 SWITCH_STANDARD_APP(multiunset_function)
 {
 	char delim = ' ';
@@ -1001,6 +1112,9 @@ void add_kz_dptools(switch_loadable_module_interface_t **module_interface)
 				   SAF_SUPPORT_NOMEDIA | SAF_ROUTING_EXEC | SAF_ZOMBIE_EXEC);
 	SWITCH_ADD_APP(app_interface, "kz_multiunset", MULTISET_SHORT_DESC, MULTISET_LONG_DESC, multiunset_function,
 				   MULTIUNSET_SYNTAX, SAF_SUPPORT_NOMEDIA | SAF_ROUTING_EXEC | SAF_ZOMBIE_EXEC);
+	SWITCH_ADD_APP(app_interface, "kz_deliver_event", DELIVER_EVENT_SHORT_DESC, DELIVER_EVENT_LONG_DESC,
+				   deliver_event_function, DELIVER_EVENT_SYNTAX,
+				   SAF_SUPPORT_NOMEDIA | SAF_ROUTING_EXEC | SAF_ZOMBIE_EXEC);
 	SWITCH_ADD_APP(app_interface, "kz_export", EXPORT_SHORT_DESC, EXPORT_LONG_DESC, export_function, EXPORT_SYNTAX,
 				   SAF_SUPPORT_NOMEDIA | SAF_ROUTING_EXEC | SAF_ZOMBIE_EXEC);
 	SWITCH_ADD_APP(app_interface, "kz_export_encoded", EXPORT_SHORT_DESC, EXPORT_LONG_DESC, export_encoded_function,
