@@ -694,6 +694,30 @@ static switch_status_t handle_request_sendevent(ei_node_t *ei_node, erlang_pid *
 	return erlang_response_badarg(rbuf);
 }
 
+/* Kazoo 5's ecallmgr added cmd/4 + cmds/4 with a Sync boolean inserted
+ * between the UUID and the command payload, sending wire tuples like
+ *   {command,  UUID, Sync, CmdProps}
+ *   {commands, UUID, Sync, [CmdProps, ...]}
+ * Without skipping the Sync atom, the next decoder step
+ * (build_event / ei_decode_list_header) fails on the atom, the handler
+ * returns SWITCH_STATUS_FALSE without writing the reply tuple's second
+ * element (rbuf already has {ref(), ...}), and the BEAM peer terminates
+ * the dist controller with exit(_, kill) (nodedown_reason=killed).
+ *
+ * This helper peeks at the next term and, if it is an atom (the new Sync
+ * flag), skips past it. Old-format 3-tuple callers from Kazoo 4.x send a
+ * list/binary in that position and are unaffected. */
+static void maybe_skip_sync_atom(ei_x_buff *buf)
+{
+	int type = 0, size = 0;
+	if (ei_get_type(buf->buff, &buf->index, &type, &size) == 0) {
+		if (type == ERL_ATOM_EXT || type == ERL_SMALL_ATOM_EXT
+		    || type == ERL_ATOM_UTF8_EXT || type == ERL_SMALL_ATOM_UTF8_EXT) {
+			ei_skip_term(buf->buff, &buf->index);
+		}
+	}
+}
+
 static switch_status_t handle_request_command(ei_node_t *ei_node, erlang_pid *pid, ei_x_buff *buf, ei_x_buff *rbuf)
 {
 	switch_core_session_t *session;
@@ -709,6 +733,8 @@ static switch_status_t handle_request_command(ei_node_t *ei_node, erlang_pid *pi
 	if (zstr_buf(uuid_str) || !(session = switch_core_session_locate(uuid_str))) {
 		return erlang_response_baduuid(rbuf);
 	}
+
+	maybe_skip_sync_atom(buf);
 
 	switch_uuid_get(&cmd_uuid);
 	switch_uuid_format(cmd_uuid_str, &cmd_uuid);
@@ -744,12 +770,19 @@ static switch_status_t handle_request_commands(ei_node_t *ei_node, erlang_pid *p
 		return erlang_response_baduuid(rbuf);
 	}
 
+	maybe_skip_sync_atom(buf);
+
 	switch_uuid_get(&cmd_uuid);
 	switch_uuid_format(cmd_uuid_str, &cmd_uuid);
 
 	if (ei_decode_list_header(buf->buff, &buf->index, &propslist_length)) {
 		switch_core_session_rwunlock(session);
-		return SWITCH_STATUS_FALSE;
+		/* Write {error, badarg} into rbuf instead of returning bare
+		 * SWITCH_STATUS_FALSE; the caller already wrote the tuple
+		 * header + reply ref, so an empty rbuf produces a malformed
+		 * 2-tuple that the BEAM peer would respond to by killing the
+		 * dist controller. */
+		return erlang_response_badarg(rbuf);
 	}
 
 	for (n = 0; n < propslist_length; n++) {
